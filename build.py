@@ -9,6 +9,7 @@ and optionally deploying the container instance on Microsoft Azure.
 
 import argparse
 import os
+import shutil
 import sys
 import subprocess
 from typing import List, Optional
@@ -20,6 +21,20 @@ class CommandRunner:
     def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
 
+    def _resolve_command(self, command: List[str]) -> List[str]:
+        """Resolves the executable path (e.g. az -> az.cmd on Windows)."""
+        if not command:
+            return command
+
+        executable = shutil.which(command[0])
+        if executable is None:
+            raise FileNotFoundError(command[0])
+
+        if executable != command[0]:
+            return [executable, *command[1:]]
+
+        return command
+
     def run(self, command: List[str], check: bool = True) -> int:
         """Executes a system command or logs it if in dry-run mode."""
         formatted_cmd = " ".join(command)
@@ -30,7 +45,8 @@ class CommandRunner:
             return 0
 
         try:
-            result = subprocess.run(command, check=check)
+            resolved_command = self._resolve_command(command)
+            result = subprocess.run(resolved_command, check=check)
             return result.returncode
         except subprocess.CalledProcessError as err:
             print(f"[ERROR] Command failed with exit code {err.returncode}: {formatted_cmd}", file=sys.stderr)
@@ -129,8 +145,8 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--registry",
-        default=os.getenv("ACR_NAME", "acringenieriaumjj"),
-        help="Azure Container Registry name (default: acringenieriaumjj)"
+        default=os.getenv("ACR_NAME", "acringenieriaum"),
+        help="Azure Container Registry name (default: acringenieriaum)"
     )
     parser.add_argument(
         "--image",
@@ -139,8 +155,8 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--tag",
-        default=os.getenv("IMAGE_TAG", "v1.0.0"),
-        help="Docker image tag (default: v1.0.0)"
+        default=os.getenv("IMAGE_TAG", "v1.0.1"),
+        help="Docker image tag (default: v1.0.1)"
     )
     parser.add_argument(
         "--dockerfile",

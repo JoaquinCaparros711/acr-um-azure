@@ -23,7 +23,8 @@ class TestCommandRunner(unittest.TestCase):
         self.assertEqual(return_code, 0)
 
     @patch("subprocess.run")
-    def test_should_executeSubprocess_when_dryRunIsDisabled(self, mock_subprocess_run):
+    @patch("build.shutil.which", return_value="docker")
+    def test_should_executeSubprocess_when_dryRunIsDisabled(self, _mock_which, mock_subprocess_run):
         # Arrange
         mock_subprocess_run.return_value = MagicMock(returncode=0)
         runner = CommandRunner(dry_run=False)
@@ -36,7 +37,34 @@ class TestCommandRunner(unittest.TestCase):
         mock_subprocess_run.assert_called_once_with(["docker", "build", "-t", "app:v1", "."], check=True)
 
     @patch("subprocess.run")
-    def test_should_raiseProcessError_when_commandFailsAndCheckIsTrue(self, mock_subprocess_run):
+    @patch("build.shutil.which", return_value=r"C:\Program Files\Azure CLI\wbin\az.CMD")
+    def test_should_resolveExecutablePath_when_azCommandIsInvokedOnWindows(self, _mock_which, mock_subprocess_run):
+        # Arrange
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        runner = CommandRunner(dry_run=False)
+
+        # Act
+        return_code = runner.run(["az", "acr", "login", "--name", "acringenieriaum"])
+
+        # Assert
+        self.assertEqual(return_code, 0)
+        mock_subprocess_run.assert_called_once_with(
+            [r"C:\Program Files\Azure CLI\wbin\az.CMD", "acr", "login", "--name", "acringenieriaum"],
+            check=True,
+        )
+
+    @patch("build.shutil.which", return_value=None)
+    def test_should_raiseFileNotFoundError_when_executableIsMissing(self, _mock_which):
+        # Arrange
+        runner = CommandRunner(dry_run=False)
+
+        # Act & Assert
+        with self.assertRaises(FileNotFoundError):
+            runner.run(["az", "acr", "login", "--name", "acringenieriaum"], check=True)
+
+    @patch("subprocess.run")
+    @patch("build.shutil.which", return_value="docker")
+    def test_should_raiseProcessError_when_commandFailsAndCheckIsTrue(self, _mock_which, mock_subprocess_run):
         # Arrange
         mock_subprocess_run.side_effect = subprocess.CalledProcessError(1, ["docker", "push"])
         runner = CommandRunner(dry_run=False)
