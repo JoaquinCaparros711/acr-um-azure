@@ -11,6 +11,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   # =========================================================================
   # STAGE 1: Test
@@ -45,6 +48,8 @@ jobs:
     outputs:
       image_full: ${{ steps.meta.outputs.image_full }}
       repo_name: ${{ steps.meta.outputs.repo_name }}
+      skip_deploy: ${{ steps.meta.outputs.skip_deploy }}
+      new_tag: ${{ steps.meta.outputs.image_tag }}
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
@@ -54,27 +59,94 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Generate Dynamic Image Metadata
+      - name: Determine Semantic Version from Commit Message
         id: meta
         run: |
-          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
-          
-          # 1. Si el push fue con un Git Tag (ej: 2.0.0), usar ese tag exacto
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            IMAGE_TAG="${{ github.ref_name }}"
-          else
-            # 2. Si es un commit en main, tomar el último Git Tag exacto del repositorio
-            IMAGE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
-          fi
-          
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          
-          echo "Tag exacto: $IMAGE_TAG"
-          echo "repo_name=$REPO_NAME" >> "$GITHUB_OUTPUT"
-          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
-          echo "image_full=${{ secrets.ACR_NAME_URL }}/$REPO_NAME:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-          echo "image_latest=${{ secrets.ACR_NAME_URL }}/$REPO_NAME:latest" >> "$GITHUB_OUTPUT"
+          python3 - << 'EOF'
+          import os
+          import re
+          import subprocess
+
+          msg = os.environ.get("COMMIT_MSG", "").lower()
+          ref = os.environ.get("GITHUB_REF", "")
+          ref_name = os.environ.get("GITHUB_REF_NAME", "")
+          repo = os.environ.get("REPO_NAME", "").lower().replace("_", "-")
+          acr_url = os.environ.get("ACR_URL", "")
+
+          # Obtener último tag existente de Git
+          try:
+              latest_tag = subprocess.check_output(
+                  ["git", "describe", "--tags", "--abbrev=0"], stderr=subprocess.DEVNULL
+              ).decode().strip()
+          except Exception:
+              latest_tag = "1.0.0"
+
+          has_v = latest_tag.startswith("v")
+          clean_tag = latest_tag.lstrip("v")
+          parts = clean_tag.split(".")
+
+          try:
+              major = int(parts[0]) if len(parts) > 0 else 1
+              minor = int(parts[1]) if len(parts) > 1 else 0
+              patch = int(parts[2]) if len(parts) > 2 else 0
+          except ValueError:
+              major, minor, patch = 1, 0, 0
+
+          # Reglas por mensaje de commit
+          is_feat = bool(re.search(r"\bfeat(\(.*\))?:", msg) or "feat(" in msg)
+          is_fix_or_refactor = bool(re.search(r"\b(fix|refactor)(\(.*\))?:", msg) or "fix(" in msg or "refactor(" in msg)
+          is_skip_deploy = bool(
+              re.search(r"\b(chore|doc|docs)(\(.*\))?:", msg)
+              or "chore(" in msg
+              or "doc(" in msg
+              or "docs(" in msg
+              or "/notdeploy" in msg
+          )
+
+          # Calcular nuevo tag
+          if ref.startswith("refs/tags/"):
+              tag = ref_name
+          elif is_feat:
+              minor += 1
+              patch = 0
+              tag = f"v{major}.{minor}.{patch}" if has_v else f"{major}.{minor}.{patch}"
+          elif is_fix_or_refactor:
+              patch += 1
+              tag = f"v{major}.{minor}.{patch}" if has_v else f"{major}.{minor}.{patch}"
+          else:
+              tag = latest_tag
+
+          image_full = f"{acr_url}/{repo}:{tag}"
+          image_latest = f"{acr_url}/{repo}:latest"
+
+          print(f"Commit message: {msg}")
+          print(f"Tag anterior: {latest_tag} -> Nuevo Tag: {tag}")
+          print(f"Skip deploy: {is_skip_deploy}")
+
+          github_output = os.environ.get("GITHUB_OUTPUT")
+          if github_output:
+              with open(github_output, "a") as f:
+                  f.write(f"repo_name={repo}\n")
+                  f.write(f"image_tag={tag}\n")
+                  f.write(f"image_full={image_full}\n")
+                  f.write(f"image_latest={image_latest}\n")
+                  f.write(f"latest_tag={latest_tag}\n")
+                  f.write(f"skip_deploy={'true' if is_skip_deploy else 'false'}\n")
+          EOF
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          ACR_URL: ${{ secrets.ACR_NAME_URL }}
+
+      - name: Push New Git Tag to Repository
+        if: github.ref == 'refs/heads/main' && steps.meta.outputs.image_tag != steps.meta.outputs.latest_tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.meta.outputs.image_tag }}"
+          git push origin "${{ steps.meta.outputs.image_tag }}" || echo "Tag already pushed"
 
       - name: Azure Login
         uses: azure/login@v2
@@ -100,12 +172,12 @@ jobs:
             ${{ steps.meta.outputs.image_latest }}
           build-args: |
             BUILD_DATE=${{ steps.meta.outputs.image_tag }}
-            VCS_REF=${{ steps.meta.outputs.short_sha }}
+            VCS_REF=${{ github.sha }}
             IMAGE_TAG=${{ steps.meta.outputs.image_tag }}
           labels: |
             org.opencontainers.image.title=${{ steps.meta.outputs.repo_name }}
             org.opencontainers.image.version=${{ steps.meta.outputs.image_tag }}
-            org.opencontainers.image.revision=${{ steps.meta.outputs.short_sha }}
+            org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
       - name: Azure Logout
@@ -115,6 +187,7 @@ jobs:
 
   # =========================================================================
   # STAGE 3: Deploy to Azure Container App
+  # - Se omite automáticamente si es chore(), doc(), docs() o /notdeploy
   # =========================================================================
   deploy:
     name: 3. Deploy to Azure Container App
@@ -123,6 +196,7 @@ jobs:
     if: |
       always() &&
       needs.test.result == 'success' &&
+      needs.build-and-push.outputs.skip_deploy != 'true' &&
       !contains(github.event.head_commit.message, '/notdeploy') &&
       (
         needs.build-and-push.result == 'success' ||
