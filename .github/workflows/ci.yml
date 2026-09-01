@@ -34,7 +34,6 @@ jobs:
 
   # =========================================================================
   # STAGE 2: Build & Push
-  # (Se ejecuta en pushes y tags. Se omite si el commit contiene '/deploy')
   # =========================================================================
   build-and-push:
     name: 2. Build & Push Image to ACR
@@ -60,20 +59,17 @@ jobs:
         run: |
           REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
           
-          # 1. Si el push fue con un Git Tag específico (ej: 2.0.0 o v2.0.0), usar ese tag exacto
+          # 1. Si el push fue con un Git Tag (ej: 2.0.0), usar ese tag exacto
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             IMAGE_TAG="${{ github.ref_name }}"
           else
-            # 2. Si es un push a main, obtener dinámicamente el último Git Tag del repo (ej: 2.0.0)
-            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
-            # Extraer MAJOR.MINOR (ej: de 2.0.0 -> 2.0 o de v2.0.0 -> v2.0)
-            BASE_PREFIX=$(echo "$LATEST_TAG" | sed -E 's/\.[0-9]+$//')
-            IMAGE_TAG="${BASE_PREFIX}.${{ github.run_number }}"
+            # 2. Si es un commit en main, tomar el último Git Tag exacto del repositorio
+            IMAGE_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
           fi
           
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           
-          echo "Tag resuelto: $IMAGE_TAG"
+          echo "Tag exacto: $IMAGE_TAG"
           echo "repo_name=$REPO_NAME" >> "$GITHUB_OUTPUT"
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
@@ -119,8 +115,6 @@ jobs:
 
   # =========================================================================
   # STAGE 3: Deploy to Azure Container App
-  # - Se omite si el commit contiene '/notdeploy'
-  # - Si el commit contiene '/deploy', despliega la última imagen (:latest)
   # =========================================================================
   deploy:
     name: 3. Deploy to Azure Container App
