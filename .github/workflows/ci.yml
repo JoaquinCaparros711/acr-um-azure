@@ -88,6 +88,10 @@ jobs:
 
       - name: Deploy to Azure Container App
         run: |
+          # Obtener el entorno de Container Apps del grupo de recursos
+          ACA_ENV=$(az containerapp env list --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --query "[0].name" -o tsv)
+          echo "Entorno detectado: $ACA_ENV"
+
           # Verificar si la Container App existe
           if az containerapp show --name "${{ steps.meta.outputs.repo_name }}-app" --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" > /dev/null 2>&1; then
             echo "Actualizando Container App existente..."
@@ -100,6 +104,7 @@ jobs:
             az containerapp create \
               --name "${{ steps.meta.outputs.repo_name }}-app" \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --environment "$ACA_ENV" \
               --image "${{ steps.meta.outputs.image_full }}" \
               --registry-server "${{ secrets.ACR_NAME_URL }}" \
               --registry-username "${{ secrets.REGISTRY_USERNAME }}" \
