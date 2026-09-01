@@ -24,8 +24,11 @@ on:
   workflow_dispatch:
 
 jobs:
+  # =========================================================================
+  # STAGE 1: Test
+  # =========================================================================
   test:
-    name: Run Unit Tests
+    name: 1. Run Unit Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Source Code
@@ -41,12 +44,17 @@ jobs:
         run: |
           go test -v -race -cover ./...
 
-  build-and-deploy:
-    name: Build, Push to ACR & Deploy to Azure
+  # =========================================================================
+  # STAGE 2: Build & Push
+  # =========================================================================
+  build-and-push:
+    name: 2. Build & Push Image to ACR
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-
+    outputs:
+      image_full: ${{ steps.meta.outputs.image_full }}
+      repo_name: ${{ steps.meta.outputs.repo_name }}
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
@@ -57,7 +65,6 @@ jobs:
       - name: Generate Dynamic Image Metadata
         id: meta
         run: |
-          # Extraer nombre del repositorio en minúsculas y sin caracteres inválidos
           REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
           IMAGE_TAG="v1.0.${{ github.run_number }}"
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
@@ -100,26 +107,45 @@ jobs:
             org.opencontainers.image.revision=${{ steps.meta.outputs.short_sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
-      - name: Deploy to Azure Container App
+      - name: Azure Logout
+        if: always()
+        run: |
+          az logout || true
+
+  # =========================================================================
+  # STAGE 3: Deploy
+  # =========================================================================
+  deploy:
+    name: 3. Deploy to Azure Container App
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy or Update Container App
         run: |
           # Obtener el entorno de Container Apps del grupo de recursos
           ACA_ENV=$(az containerapp env list --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --query "[0].name" -o tsv)
           echo "Entorno detectado: $ACA_ENV"
 
           # Verificar si la Container App existe
-          if az containerapp show --name "${{ steps.meta.outputs.repo_name }}-app" --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" > /dev/null 2>&1; then
+          if az containerapp show --name "${{ needs.build-and-push.outputs.repo_name }}-app" --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" > /dev/null 2>&1; then
             echo "Actualizando Container App existente..."
             az containerapp update \
-              --name "${{ steps.meta.outputs.repo_name }}-app" \
+              --name "${{ needs.build-and-push.outputs.repo_name }}-app" \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-              --image "${{ steps.meta.outputs.image_full }}"
+              --image "${{ needs.build-and-push.outputs.image_full }}"
           else
             echo "Creando nueva Container App..."
             az containerapp create \
-              --name "${{ steps.meta.outputs.repo_name }}-app" \
+              --name "${{ needs.build-and-push.outputs.repo_name }}-app" \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
               --environment "$ACA_ENV" \
-              --image "${{ steps.meta.outputs.image_full }}" \
+              --image "${{ needs.build-and-push.outputs.image_full }}" \
               --registry-server "${{ secrets.ACR_NAME_URL }}" \
               --registry-username "${{ secrets.REGISTRY_USERNAME }}" \
               --registry-password "${{ secrets.REGISTRY_PASSWORD }}" \
