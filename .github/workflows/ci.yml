@@ -4,23 +4,9 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - 'README.md'
-      - '.gitignore'
-      - 'build.py'
-      - 'test_build.py'
-      - 'docs/**'
-      - '*.md'
   pull_request:
     branches:
       - main
-    paths-ignore:
-      - 'README.md'
-      - '.gitignore'
-      - 'build.py'
-      - 'test_build.py'
-      - 'docs/**'
-      - '*.md'
   workflow_dispatch:
 
 jobs:
@@ -113,13 +99,13 @@ jobs:
           az logout || true
 
   # =========================================================================
-  # STAGE 3: Deploy
+  # STAGE 3: Deploy (se omite automáticamente si el commit incluye '/notdeploy')
   # =========================================================================
   deploy:
     name: 3. Deploy to Azure Container App
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '/notdeploy')
     steps:
       - name: Azure Login
         uses: azure/login@v2
