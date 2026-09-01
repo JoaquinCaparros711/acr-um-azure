@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*.*.*'
+      - 'v*'
   pull_request:
     branches:
       - main
@@ -31,13 +34,16 @@ jobs:
           go test -v -race -cover ./...
 
   # =========================================================================
-  # STAGE 2: Build & Push
+  # STAGE 2: Build & Push Image to ACR
+  # (Se ejecuta en pushes normales y tags. Se omite si el commit tiene '/deploy')
   # =========================================================================
   build-and-push:
     name: 2. Build & Push Image to ACR
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: |
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) &&
+      !contains(github.event.head_commit.message, '/deploy')
     outputs:
       image_full: ${{ steps.meta.outputs.image_full }}
       repo_name: ${{ steps.meta.outputs.repo_name }}
@@ -52,7 +58,14 @@ jobs:
         id: meta
         run: |
           REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
-          IMAGE_TAG="v1.0.${{ github.run_number }}"
+          
+          # Si fue disparado por un Git Tag (ej: v1.2.0), usar ese tag exacto; sino usar run_number
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            IMAGE_TAG="${{ github.ref_name }}"
+          else
+            IMAGE_TAG="v1.0.${{ github.run_number }}"
+          fi
+          
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
           
           echo "repo_name=$REPO_NAME" >> "$GITHUB_OUTPUT"
@@ -99,13 +112,23 @@ jobs:
           az logout || true
 
   # =========================================================================
-  # STAGE 3: Deploy (se omite automáticamente si el commit incluye '/notdeploy')
+  # STAGE 3: Deploy to Azure Container App
+  # - Se omite si el commit contiene '/notdeploy'
+  # - Si el commit contiene '/deploy', despliega directo la última imagen (:latest)
+  # - En flujo normal o tags, despliega la nueva imagen recién construida
   # =========================================================================
   deploy:
     name: 3. Deploy to Azure Container App
-    needs: build-and-push
+    needs: [test, build-and-push]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '/notdeploy')
+    if: |
+      always() &&
+      needs.test.result == 'success' &&
+      !contains(github.event.head_commit.message, '/notdeploy') &&
+      (
+        needs.build-and-push.result == 'success' ||
+        contains(github.event.head_commit.message, '/deploy')
+      )
     steps:
       - name: Azure Login
         uses: azure/login@v2
@@ -114,24 +137,35 @@ jobs:
 
       - name: Deploy or Update Container App
         run: |
+          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
+          
+          # Determinar imagen a desplegar: la recién buildeada o la latest existente si fue /deploy
+          if [ -n "${{ needs.build-and-push.outputs.image_full }}" ]; then
+            TARGET_IMAGE="${{ needs.build-and-push.outputs.image_full }}"
+          else
+            TARGET_IMAGE="${{ secrets.ACR_NAME_URL }}/$REPO_NAME:latest"
+          fi
+          
+          echo "Desplegando imagen: $TARGET_IMAGE"
+
           # Obtener el entorno de Container Apps del grupo de recursos
           ACA_ENV=$(az containerapp env list --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --query "[0].name" -o tsv)
           echo "Entorno detectado: $ACA_ENV"
 
           # Verificar si la Container App existe
-          if az containerapp show --name "${{ needs.build-and-push.outputs.repo_name }}-app" --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" > /dev/null 2>&1; then
+          if az containerapp show --name "$REPO_NAME-app" --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" > /dev/null 2>&1; then
             echo "Actualizando Container App existente..."
             az containerapp update \
-              --name "${{ needs.build-and-push.outputs.repo_name }}-app" \
+              --name "$REPO_NAME-app" \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-              --image "${{ needs.build-and-push.outputs.image_full }}"
+              --image "$TARGET_IMAGE"
           else
             echo "Creando nueva Container App..."
             az containerapp create \
-              --name "${{ needs.build-and-push.outputs.repo_name }}-app" \
+              --name "$REPO_NAME-app" \
               --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
               --environment "$ACA_ENV" \
-              --image "${{ needs.build-and-push.outputs.image_full }}" \
+              --image "$TARGET_IMAGE" \
               --registry-server "${{ secrets.ACR_NAME_URL }}" \
               --registry-username "${{ secrets.REGISTRY_USERNAME }}" \
               --registry-password "${{ secrets.REGISTRY_PASSWORD }}" \
