@@ -145,8 +145,8 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--registry",
-        default=os.getenv("ACR_NAME", "acringenieriaum"),
-        help="Azure Container Registry name (default: acringenieriaum)"
+        default=os.getenv("ACR_NAME", "acringenieriaumjj"),
+        help="Azure Container Registry name (default: acringenieriaumjj)"
     )
     parser.add_argument(
         "--image",
@@ -155,8 +155,8 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--tag",
-        default=os.getenv("IMAGE_TAG", "v1.0.1"),
-        help="Docker image tag (default: v1.0.1)"
+        default=os.getenv("IMAGE_TAG", "v1.0.0"),
+        help="Docker image tag (default: v1.0.0)"
     )
     parser.add_argument(
         "--dockerfile",
