@@ -1,83 +1,99 @@
-# Go Fiber & Azure OpenTelemetry Observability Project
+# Go Fiber Hello World & Azure ACR Automation Project
 
-This repository contains a production-grade **Go** web application built with the **[Fiber](https://gofiber.io/)** framework and instrumented with **[OpenTelemetry](https://opentelemetry.io/)** for distributed tracing and metrics, seamlessly integrating with **Azure Monitor / Application Insights**, along with CI/CD automation for **Azure Container Registry (ACR)** and **Azure Container Apps (ACA)**.
+This repository contains a lightweight **Go** web application built with the **[Fiber](https://gofiber.io/)** framework, along with Python automation scripts for building, tagging, publishing to **Azure Container Registry (ACR)**, and deploying to **Azure Container Instances (ACI)**.
 
----
+## Project Structure
 
-## Architecture & Project Structure
-
-- [`main.go`](main.go): Go HTTP server with OpenTelemetry tracing and metrics instrumentation, child span demos, and graceful termination.
-- [`main_test.go`](main_test.go): Comprehensive integration and endpoint unit tests adhering to AAA pattern.
-- [`pkg/telemetry/telemetry.go`](pkg/telemetry/telemetry.go): OpenTelemetry TracerProvider and MeterProvider lifecycle management, resource attribution, and OTLP / stdout exporters.
-- [`pkg/telemetry/middleware.go`](pkg/telemetry/middleware.go): Fiber HTTP middleware for W3C trace context extraction, latency recording, error tracking, and response header injection (`X-Trace-Id`).
-- [`pkg/telemetry/telemetry_test.go`](pkg/telemetry/telemetry_test.go): Unit test suite for the telemetry provider and middleware.
-- [`Dockerfile`](Dockerfile): Multi-stage containerization with distroless runtime (`linux/amd64`).
-- [`.github/workflows/ci.yml`](.github/workflows/ci.yml): 3-stage CI/CD pipeline (Test -> Build & Push ACR -> Deploy Azure Container App).
+- [`main.go`](main.go): Go HTTP server implementation with `/` and `/health` endpoints exposed on port `8080`.
+- [`main_test.go`](main_test.go): Unit tests for the Go Fiber application.
+- [`go.mod`](go.mod): Go module dependency definitions.
+- [`go.sum`](go.sum): Checksums of module dependencies.
+- [`Dockerfile`](Dockerfile): Multi-stage Dockerfile provided for packaging the Go application into a minimal distroless image.
+- [`build.py`](build.py): Python automation script for Docker build, Azure ACR login, image tagging, pushing, and ACI deployment.
+- [`test_build.py`](test_build.py): Unit tests for the `build.py` automation script.
 
 ---
 
-## OpenTelemetry Features
+## Local Execution with Docker (Manual)
 
-### 1. Distributed Tracing
-- **W3C TraceContext Propagation:** Extracts and propagates incoming trace headers across microservices.
-- **Span Attributes:** Automatically captures HTTP method, route, status code, user agent, client IP, and process metadata.
-- **Trace ID Injection:** Automatically attaches `X-Trace-Id` header to every HTTP response for end-to-end correlation.
-- **Child Spans:** Support for nested business operations (demonstrated in `/api/v1/telemetry-demo`).
+To build and run the Go application container manually using Docker:
 
-### 2. Metrics & Observability
-- `http_server_requests_total`: Counter tracking total requests partitioned by method, route, and status code.
-- `http_server_duration_milliseconds`: Explicit histogram measuring request execution latencies.
-- `http_server_active_requests`: Real-time gauge for concurrent active connections.
+```bash
+# Build local Docker image
+docker build -t app-azure:v1.0.0 .
+
+# Run container on port 8080
+docker run -d -p 8080:8080 --name fiber-app app-azure:v1.0.0
+```
 
 ---
+  
+## Python Automation Script (`build.py`)
 
-## Environment Variables Configuration
+The `build.py` script automates the complete workflow:
+1. Building local Docker image (`docker build`).
+2. Authenticating with Azure Container Registry (`az acr login`).
+3. Tagging remote image (`docker tag`).
+4. Pushing image to registry (`docker push`).
+5. (Optional) Deploying container instance to Azure (`az container create`).
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `OTEL_SERVICE_NAME` | Name of the service in Azure Monitor / OTLP | `acr-um-azure-app` |
-| `ENVIRONMENT` | Deployment environment tag | `production` |
-| `IMAGE_TAG` | Application version attached to telemetry | `v1.0.0` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP HTTP endpoint (e.g. OpenTelemetry Collector or Azure OTLP) | `""` *(stdout fallback)* |
-| `OTEL_EXPORTER_STDOUT` | Force stdout printing of traces and metrics | `true` *(when endpoint is empty)* |
-| `PORT` | HTTP server listening port | `8080` |
+### Usage Examples
 
----
-
-## Local Execution & Verification
-
-### Run locally:
 ```bash
-go run main.go
-```
+# Full workflow (Build -> ACR Login -> Tag -> Push)
+python3 build.py
 
-### Run with Docker:
-```bash
-docker build -t acr-um-azure:v1.0.0 .
-docker run -p 8080:8080 -e OTEL_EXPORTER_STDOUT=true acr-um-azure:v1.0.0
-```
+# Simulation mode without executing shell commands (Dry Run)
+python3 build.py --dry-run
 
-### Test HTTP Endpoints:
+# Workflow with automated deployment to Azure Container Instances (ACI)
+python3 build.py --deploy
 
-1. **Root endpoint:**
-```bash
-curl -i http://localhost:8080/
-```
-
-2. **Health check endpoint:**
-```bash
-curl -i http://localhost:8080/health
-```
-
-3. **OpenTelemetry Child Spans Demo:**
-```bash
-curl -i http://localhost:8080/api/v1/telemetry-demo
+# Custom parameters execution
+python3 build.py --registry myregistry --image myapp --tag v1.2.0 --dry-run
 ```
 
 ---
 
-## Running Unit & Integration Tests
+## Running Unit Tests
+
+### Go Server Tests
+```bash
+go test -v ./...
+```
+
+### Python Automation Tests
+```bash
+python3 -m unittest test_build.py
+```
+
+---
+
+## API Verification
+
+Once the application is running, test the HTTP endpoints:
 
 ```bash
-go test -v -race -cover ./...
+curl http://localhost:8080/
 ```
+
+Expected JSON response:
+```json
+{
+  "message": "Hello World from Go and Fiber!",
+  "status": "success"
+}
+```
+
+Health check endpoint:
+```bash
+curl http://localhost:8080/health
+```
+
+Expected JSON response:
+```json
+{
+  "status": "healthy"
+}
+```
+    
