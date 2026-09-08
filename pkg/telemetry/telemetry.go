@@ -75,8 +75,7 @@ func LoadConfigFromEnv() Config {
 	if appInsightsConn == "" {
 		appInsightsConn = os.Getenv("APPINSIGHTS_CONNECTION_STRING")
 	}
-	appInsightsConn = strings.TrimPrefix(strings.TrimSpace(appInsightsConn), "$")
-	appInsightsConn = strings.Trim(appInsightsConn, `"'`)
+	appInsightsConn = sanitizeValue(appInsightsConn)
 
 	instrumentationKey := os.Getenv("INSTRUMENTATION_KEY")
 	if instrumentationKey == "" {
@@ -88,8 +87,7 @@ func LoadConfigFromEnv() Config {
 	if instrumentationKey == "" {
 		instrumentationKey = os.Getenv("APPLICATIONINSIGHTS_INSTRUMENTATION_KEY")
 	}
-	instrumentationKey = strings.TrimPrefix(strings.TrimSpace(instrumentationKey), "$")
-	instrumentationKey = strings.Trim(instrumentationKey, `"'`)
+	instrumentationKey = sanitizeValue(instrumentationKey)
 
 	if appInsightsConn == "" && instrumentationKey != "" {
 		appInsightsConn = "InstrumentationKey=" + instrumentationKey
@@ -276,17 +274,27 @@ func initMeterProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 	return mp, nil
 }
 
+// sanitizeValue strips spaces, quotes, and dollar signs from configuration strings.
+func sanitizeValue(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, `"'`)
+	s = strings.TrimPrefix(s, "$")
+	s = strings.Trim(s, `"'`)
+	return strings.TrimSpace(s)
+}
+
 // parseAppInsightsConnectionString extracts IngestionEndpoint and InstrumentationKey from Azure Connection String.
 func parseAppInsightsConnectionString(connStr string) (string, string) {
 	var endpoint, ikey string
+	connStr = sanitizeValue(connStr)
 	parts := strings.Split(connStr, ";")
 	for _, part := range parts {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
 		if len(kv) != 2 {
 			continue
 		}
-		key := strings.ToLower(kv[0])
-		val := kv[1]
+		key := strings.ToLower(sanitizeValue(kv[0]))
+		val := sanitizeValue(kv[1])
 		if key == "ingestionendpoint" {
 			endpoint = strings.TrimPrefix(val, "https://")
 			endpoint = strings.TrimPrefix(endpoint, "http://")
