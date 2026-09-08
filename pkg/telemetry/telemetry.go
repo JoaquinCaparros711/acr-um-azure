@@ -63,6 +63,38 @@ func LoadConfigFromEnv() Config {
 	}
 
 	appInsightsConn := os.Getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
+	if appInsightsConn == "" {
+		appInsightsConn = os.Getenv("CONNECTION_STRING")
+	}
+	if appInsightsConn == "" {
+		appInsightsConn = os.Getenv("APPLICATIONINSIGHTS")
+	}
+	if appInsightsConn == "" {
+		appInsightsConn = os.Getenv("APPLICAITONINSIGHTS")
+	}
+	if appInsightsConn == "" {
+		appInsightsConn = os.Getenv("APPINSIGHTS_CONNECTION_STRING")
+	}
+	appInsightsConn = strings.TrimPrefix(strings.TrimSpace(appInsightsConn), "$")
+	appInsightsConn = strings.Trim(appInsightsConn, `"'`)
+
+	instrumentationKey := os.Getenv("INSTRUMENTATION_KEY")
+	if instrumentationKey == "" {
+		instrumentationKey = os.Getenv("INSTRUMENTATION")
+	}
+	if instrumentationKey == "" {
+		instrumentationKey = os.Getenv("APPINSIGHTS_INSTRUMENTATIONKEY")
+	}
+	if instrumentationKey == "" {
+		instrumentationKey = os.Getenv("APPLICATIONINSIGHTS_INSTRUMENTATION_KEY")
+	}
+	instrumentationKey = strings.TrimPrefix(strings.TrimSpace(instrumentationKey), "$")
+	instrumentationKey = strings.Trim(instrumentationKey, `"'`)
+
+	if appInsightsConn == "" && instrumentationKey != "" {
+		appInsightsConn = "InstrumentationKey=" + instrumentationKey
+	}
+
 	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	otlpHeaders := parseHeaders(os.Getenv("OTEL_EXPORTER_OTLP_HEADERS"))
 
@@ -102,6 +134,7 @@ func InitTelemetry(ctx context.Context, cfg Config) (*Provider, ShutdownFunc, er
 			semconv.ServiceVersionKey.String(cfg.ServiceVersion),
 			attribute.String("deployment.environment", cfg.Environment),
 			attribute.String("cloud.provider", "azure"),
+			attribute.String("ai.cloud.role", cfg.ServiceName),
 		),
 		resource.WithProcess(),
 		resource.WithOS(),
@@ -261,6 +294,9 @@ func parseAppInsightsConnectionString(connStr string) (string, string) {
 		} else if key == "instrumentationkey" {
 			ikey = val
 		}
+	}
+	if endpoint == "" && ikey != "" {
+		endpoint = "in.applicationinsights.azure.com"
 	}
 	return endpoint, ikey
 }

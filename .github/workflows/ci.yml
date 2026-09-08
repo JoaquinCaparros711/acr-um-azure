@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - '*'
+      - "*"
   pull_request:
     branches:
       - main
@@ -28,7 +28,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: "1.22"
           cache: true
 
       - name: Run Go Unit Tests
@@ -211,43 +211,66 @@ jobs:
       - name: Deploy or Update Container App
         run: |
           REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
-          
+
           # Determinar imagen a desplegar
           if [ -n "${{ needs.build-and-push.outputs.image_full }}" ]; then
             TARGET_IMAGE="${{ needs.build-and-push.outputs.image_full }}"
           else
             TARGET_IMAGE="${{ secrets.ACR_NAME_URL }}/$REPO_NAME:latest"
           fi
-          
+
           echo "Desplegando imagen: $TARGET_IMAGE"
 
           # Obtener el entorno de Container Apps del grupo de recursos
           ACA_ENV=$(az containerapp env list --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --query "[0].name" -o tsv)
           echo "Entorno detectado: $ACA_ENV"
 
+          # Configurar variables de entorno para Application Insights si existen
+          EXTRA_ENV_ARGS=""
+          if [ -n "${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" ]; then
+            EXTRA_ENV_ARGS="APPLICATIONINSIGHTS_CONNECTION_STRING=${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}"
+          elif [ -n "${{ secrets.CONNECTION_STRING }}" ]; then
+            EXTRA_ENV_ARGS="CONNECTION_STRING=${{ secrets.CONNECTION_STRING }}"
+          fi
+          if [ -n "${{ secrets.INSTRUMENTATION_KEY }}" ]; then
+            EXTRA_ENV_ARGS="$EXTRA_ENV_ARGS INSTRUMENTATION_KEY=${{ secrets.INSTRUMENTATION_KEY }}"
+          fi
+
           # Verificar si la Container App existe
           if az containerapp show --name "$REPO_NAME-app" --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" > /dev/null 2>&1; then
             echo "Actualizando Container App existente..."
-            az containerapp update \
-              --name "$REPO_NAME-app" \
-              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-              --image "$TARGET_IMAGE"
+            if [ -n "$EXTRA_ENV_ARGS" ]; then
+              az containerapp update \
+                --name "$REPO_NAME-app" \
+                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+                --image "$TARGET_IMAGE" \
+                --set-env-vars $EXTRA_ENV_ARGS
+            else
+              az containerapp update \
+                --name "$REPO_NAME-app" \
+                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+                --image "$TARGET_IMAGE"
+            fi
           else
             echo "Creando nueva Container App..."
-            az containerapp create \
-              --name "$REPO_NAME-app" \
-              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-              --environment "$ACA_ENV" \
-              --image "$TARGET_IMAGE" \
-              --registry-server "${{ secrets.ACR_NAME_URL }}" \
-              --registry-username "${{ secrets.REGISTRY_USERNAME }}" \
-              --registry-password "${{ secrets.REGISTRY_PASSWORD }}" \
+            CREATE_CMD="az containerapp create \
+              --name $REPO_NAME-app \
+              --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
+              --environment $ACA_ENV \
+              --image $TARGET_IMAGE \
+              --registry-server ${{ secrets.ACR_NAME_URL }} \
+              --registry-username ${{ secrets.REGISTRY_USERNAME }} \
+              --registry-password ${{ secrets.REGISTRY_PASSWORD }} \
               --ingress external \
               --target-port 8080 \
               --cpu 0.25 \
               --memory 0.5Gi \
               --min-replicas 1 \
-              --max-replicas 1
+              --max-replicas 1"
+            if [ -n "$EXTRA_ENV_ARGS" ]; then
+              CREATE_CMD="$CREATE_CMD --env-vars $EXTRA_ENV_ARGS"
+            fi
+            eval "$CREATE_CMD"
           fi
 
       - name: Azure Logout
