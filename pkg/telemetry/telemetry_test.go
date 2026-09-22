@@ -120,7 +120,9 @@ func Test_Should_InjectTraceHeaderAndRecordMetrics_When_RequestPassesThroughMidd
 	defer func() { _ = shutdown(ctx) }()
 
 	app := fiber.New()
-	app.Use(FiberMiddleware(cfg.ServiceName))
+	for _, h := range FiberMiddleware(cfg.ServiceName) {
+		app.Use(h)
+	}
 	app.Get("/test-route", func(c *fiber.Ctx) error {
 		reqCtx := c.UserContext()
 		_, span := StartSpan(reqCtx, "inner-computation", attribute.String("calc.type", "hash"))
@@ -158,7 +160,9 @@ func Test_Should_CaptureErrorAndStatusAttributes_When_HandlerReturnsError(t *tes
 	defer func() { _ = shutdown(ctx) }()
 
 	app := fiber.New()
-	app.Use(FiberMiddleware(cfg.ServiceName))
+	for _, h := range FiberMiddleware(cfg.ServiceName) {
+		app.Use(h)
+	}
 	app.Get("/error-500", func(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "database connection failed")
 	})

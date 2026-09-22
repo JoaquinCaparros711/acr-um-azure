@@ -6,24 +6,33 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/exporters/stdout/stdoutlog"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
+
+const loggerName = "acr-um-azure"
 
 // Config defines the configuration options for OpenTelemetry provider.
 type Config struct {
@@ -39,10 +48,11 @@ type Config struct {
 	ExportInterval        time.Duration
 }
 
-// Provider encapsulates the initialized OpenTelemetry Tracer and Meter providers.
+// Provider encapsulates the initialized OpenTelemetry Tracer, Meter and Logger providers.
 type Provider struct {
 	tracerProvider *sdktrace.TracerProvider
 	meterProvider  *sdkmetric.MeterProvider
+	loggerProvider *sdklog.LoggerProvider
 }
 
 // ShutdownFunc cleans up OpenTelemetry background exporters and flushes pending telemetry.
@@ -118,17 +128,30 @@ func InitTelemetry(ctx context.Context, cfg Config) (*Provider, ShutdownFunc, er
 		return nil, nil, fmt.Errorf("failed to initialize meter provider: %w", err)
 	}
 
+	loggerProvider, err := initLoggerProvider(ctx, cfg, res)
+	if err != nil {
+		_ = tracerProvider.Shutdown(ctx)
+		_ = meterProvider.Shutdown(ctx)
+		return nil, nil, fmt.Errorf("failed to initialize logger provider: %w", err)
+	}
+
 	// Register global providers and W3C trace context propagator
 	otel.SetTracerProvider(tracerProvider)
 	otel.SetMeterProvider(meterProvider)
+	global.SetLoggerProvider(loggerProvider)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{},
 		propagation.Baggage{},
 	))
 
+	// Route stdlib slog through the OTel logger. slog.InfoContext(ctx, ...) now
+	// carries trace_id/span_id automatically and is exported via OTLP.
+	slog.SetDefault(slog.New(otelslog.NewHandler(loggerName)))
+
 	provider := &Provider{
 		tracerProvider: tracerProvider,
 		meterProvider:  meterProvider,
+		loggerProvider: loggerProvider,
 	}
 
 	shutdown := func(shutdownCtx context.Context) error {
@@ -138,6 +161,9 @@ func InitTelemetry(ctx context.Context, cfg Config) (*Provider, ShutdownFunc, er
 		}
 		if err := meterProvider.Shutdown(shutdownCtx); err != nil {
 			errs = append(errs, fmt.Errorf("error shutting down meter provider: %w", err))
+		}
+		if err := loggerProvider.Shutdown(shutdownCtx); err != nil {
+			errs = append(errs, fmt.Errorf("error shutting down logger provider: %w", err))
 		}
 		return errors.Join(errs...)
 	}
@@ -259,6 +285,46 @@ func initMeterProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 	)
 
 	return mp, nil
+}
+
+func initLoggerProvider(ctx context.Context, cfg Config, res *resource.Resource) (*sdklog.LoggerProvider, error) {
+	var exporter sdklog.Exporter
+	var err error
+
+	if cfg.UseStdout {
+		writer := cfg.StdoutWriter
+		if writer == nil {
+			writer = os.Stdout
+		}
+		exporter, err = stdoutlog.New(stdoutlog.WithWriter(writer), stdoutlog.WithPrettyPrint())
+	} else if cfg.OtlpProtocol == "grpc" {
+		opts := []otlploggrpc.Option{otlploggrpc.WithEndpoint(grpcEndpoint(cfg.OtlpEndpoint))}
+		if len(cfg.OtlpHeaders) > 0 {
+			opts = append(opts, otlploggrpc.WithHeaders(cfg.OtlpHeaders))
+		}
+		if !strings.HasPrefix(cfg.OtlpEndpoint, "https://") {
+			opts = append(opts, otlploggrpc.WithInsecure())
+		}
+		exporter, err = otlploggrpc.New(ctx, opts...)
+	} else {
+		opts := []otlploghttp.Option{otlploghttp.WithEndpoint(cfg.OtlpEndpoint)}
+		if len(cfg.OtlpHeaders) > 0 {
+			opts = append(opts, otlploghttp.WithHeaders(cfg.OtlpHeaders))
+		}
+		if !strings.HasPrefix(cfg.OtlpEndpoint, "https://") {
+			opts = append(opts, otlploghttp.WithInsecure())
+		}
+		exporter, err = otlploghttp.New(ctx, opts...)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create log exporter: %w", err)
+	}
+
+	return sdklog.NewLoggerProvider(
+		sdklog.WithResource(res),
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(exporter)),
+	), nil
 }
 
 func grpcEndpoint(endpoint string) string {
