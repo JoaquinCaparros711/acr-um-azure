@@ -8,7 +8,33 @@ import unittest
 from unittest.mock import MagicMock, patch
 import subprocess
 
-from build import CommandRunner, AcrPublisher, AciDeployer, parse_args
+from build import CommandRunner, AcrPublisher, AciDeployer, DependencyChecker, parse_args
+
+
+class TestDependencyChecker(unittest.TestCase):
+    @patch("build.shutil.which", return_value="/usr/local/bin/docker")
+    def test_should_passWithoutError_when_allDependenciesAreInstalled(self, _mock_which):
+        # Arrange
+        checker = DependencyChecker(required=["docker", "az"])
+
+        # Act & Assert — should not raise
+        try:
+            checker.check()
+        except EnvironmentError:
+            self.fail("DependencyChecker.check() raised EnvironmentError unexpectedly")
+
+    @patch("build.shutil.which", return_value=None)
+    def test_should_raiseEnvironmentError_when_dependencyIsMissing(self, _mock_which):
+        # Arrange
+        checker = DependencyChecker(required=["docker", "az"])
+
+        # Act & Assert
+        with self.assertRaises(EnvironmentError) as context:
+            checker.check()
+
+        error_message = str(context.exception)
+        self.assertIn("docker", error_message)
+        self.assertIn("az", error_message)
 
 
 class TestCommandRunner(unittest.TestCase):
@@ -164,11 +190,11 @@ class TestArgumentParser(unittest.TestCase):
         args = parse_args([])
 
         # Assert
-        self.assertEqual(args.registry, "acringenieriaumjj")
+        self.assertEqual(args.registry, "acringenieriaum")
         self.assertEqual(args.image, "app-azure")
-        self.assertEqual(args.tag, "v1.0.0")
+        self.assertEqual(args.tag, "v1.0.1")
         self.assertEqual(args.dockerfile, "Dockerfile")
-        self.assertEqual(args.resource_group, "rg-ingenieria-um")
+        self.assertEqual(args.resource_group, "azr-ingenieria-um-bujaldon")
         self.assertFalse(args.deploy)
         self.assertFalse(args.dry_run)
 

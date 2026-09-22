@@ -20,12 +20,14 @@ func Test_Should_LoadConfigFromEnv_When_EnvironmentVariablesAreProvided(t *testi
 	_ = os.Setenv("IMAGE_TAG", "v2.5.0")
 	_ = os.Setenv("ENVIRONMENT", "staging")
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4318")
+	_ = os.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
 	_ = os.Setenv("OTEL_EXPORTER_STDOUT", "false")
 	defer func() {
 		_ = os.Unsetenv("OTEL_SERVICE_NAME")
 		_ = os.Unsetenv("IMAGE_TAG")
 		_ = os.Unsetenv("ENVIRONMENT")
 		_ = os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+		_ = os.Unsetenv("OTEL_EXPORTER_OTLP_PROTOCOL")
 		_ = os.Unsetenv("OTEL_EXPORTER_STDOUT")
 	}()
 
@@ -37,10 +39,11 @@ func Test_Should_LoadConfigFromEnv_When_EnvironmentVariablesAreProvided(t *testi
 	assert.Equal(t, "v2.5.0", cfg.ServiceVersion)
 	assert.Equal(t, "staging", cfg.Environment)
 	assert.Equal(t, "http://otel-collector:4318", cfg.OtlpEndpoint)
+	assert.Equal(t, "grpc", cfg.OtlpProtocol)
 	assert.False(t, cfg.UseStdout)
 }
 
-func Test_Should_ParseAppInsightsConnectionString_When_Provided(t *testing.T) {
+func Test_Should_UseStdout_When_OnlyAppInsightsConnectionStringIsProvided(t *testing.T) {
 	// Arrange
 	connStr := "InstrumentationKey=11111111-2222-3333-4444-555555555555;IngestionEndpoint=https://eastus-8.in.applicationinsights.azure.com/;LiveEndpoint=https://eastus.livediagnostics.monitor.azure.com/"
 	_ = os.Setenv("APPLICATIONINSIGHTS_CONNECTION_STRING", connStr)
@@ -53,64 +56,25 @@ func Test_Should_ParseAppInsightsConnectionString_When_Provided(t *testing.T) {
 	cfg := LoadConfigFromEnv()
 
 	// Assert
-	assert.Equal(t, "eastus-8.in.applicationinsights.azure.com", cfg.OtlpEndpoint)
-	assert.Equal(t, "11111111-2222-3333-4444-555555555555", cfg.OtlpHeaders["x-api-key"])
+	assert.Empty(t, cfg.OtlpEndpoint)
+	assert.True(t, cfg.UseStdout)
 }
 
-func Test_Should_ParseConnectionStringFallback_When_CONNECTION_STRING_IsProvided(t *testing.T) {
+func Test_Should_SanitizeApplicationInsightsConnectionString_When_Provided(t *testing.T) {
 	// Arrange
-	connStr := "InstrumentationKey=22222222-3333-4444-5555-666666666666;IngestionEndpoint=https://westeurope-5.in.applicationinsights.azure.com/"
-	_ = os.Unsetenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
-	_ = os.Setenv("CONNECTION_STRING", connStr)
+	_ = os.Setenv("APPLICATIONINSIGHTS_CONNECTION_STRING", "\"$InstrumentationKey=44444444-5555-6666-7777-888888888888;IngestionEndpoint=https://eastus-8.in.applicationinsights.azure.com/\"")
 	_ = os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	defer func() {
-		_ = os.Unsetenv("CONNECTION_STRING")
+		_ = os.Unsetenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
 	}()
 
 	// Act
 	cfg := LoadConfigFromEnv()
 
 	// Assert
-	assert.Equal(t, "westeurope-5.in.applicationinsights.azure.com", cfg.OtlpEndpoint)
-	assert.Equal(t, "22222222-3333-4444-5555-666666666666", cfg.OtlpHeaders["x-api-key"])
-}
-
-func Test_Should_ParseInstrumentationKeyFallback_When_INSTRUMENTATION_KEY_IsProvided(t *testing.T) {
-	// Arrange
-	_ = os.Unsetenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
-	_ = os.Unsetenv("CONNECTION_STRING")
-	_ = os.Setenv("INSTRUMENTATION_KEY", "33333333-4444-5555-6666-777777777777")
-	_ = os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-	defer func() {
-		_ = os.Unsetenv("INSTRUMENTATION_KEY")
-	}()
-
-	// Act
-	cfg := LoadConfigFromEnv()
-
-	// Assert
-	assert.Equal(t, "in.applicationinsights.azure.com", cfg.OtlpEndpoint)
-	assert.Equal(t, "33333333-4444-5555-6666-777777777777", cfg.OtlpHeaders["x-api-key"])
-}
-
-func Test_Should_ParseAndSanitizeLeadingDollarAndQuotes_When_SecretIsProvided(t *testing.T) {
-	// Arrange
-	_ = os.Unsetenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
-	_ = os.Unsetenv("CONNECTION_STRING")
-	_ = os.Setenv("APPLICAITONINSIGHTS", "\"$InstrumentationKey=44444444-5555-6666-7777-888888888888;IngestionEndpoint=https://eastus-8.in.applicationinsights.azure.com/\"")
-	_ = os.Setenv("INSTRUMENTATION", "$44444444-5555-6666-7777-888888888888")
-	_ = os.Unsetenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-	defer func() {
-		_ = os.Unsetenv("APPLICAITONINSIGHTS")
-		_ = os.Unsetenv("INSTRUMENTATION")
-	}()
-
-	// Act
-	cfg := LoadConfigFromEnv()
-
-	// Assert
-	assert.Equal(t, "eastus-8.in.applicationinsights.azure.com", cfg.OtlpEndpoint)
-	assert.Equal(t, "44444444-5555-6666-7777-888888888888", cfg.OtlpHeaders["x-api-key"])
+	assert.Empty(t, cfg.OtlpEndpoint)
+	assert.True(t, cfg.UseStdout)
+	assert.Equal(t, "InstrumentationKey=44444444-5555-6666-7777-888888888888;IngestionEndpoint=https://eastus-8.in.applicationinsights.azure.com/", cfg.AppInsightsConnString)
 }
 
 func Test_Should_InitializeAndShutdownTelemetry_When_ValidConfigProvided(t *testing.T) {

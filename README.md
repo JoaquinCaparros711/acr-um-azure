@@ -15,7 +15,7 @@ This repository contains a high-performance **Go** REST API built with the **[Fi
   - `http_server_duration_milliseconds`: Latency histogram.
   - `http_server_active_requests`: Real-time gauge for concurrent active connections.
 - **Azure Observability Integration:**
-  - Direct ingestion with **Azure Application Insights** via `APPLICATIONINSIGHTS_CONNECTION_STRING` or OTLP collector endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`).
+  - OTLP export through an OpenTelemetry Collector or Azure Monitor OTLP ingestion endpoint.
   - Automatic fallback to stdout exporter for local development and offline testing.
 - **Resilient Infrastructure:**
   - Non-blocking graceful server and telemetry provider shutdown (`SIGINT`, `SIGTERM`).
@@ -43,9 +43,9 @@ The application loads observability configuration from standard environment vari
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Azure Application Insights connection string | _(empty)_ |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Remote OTLP HTTP collector endpoint | _(empty)_ |
-| `OTEL_EXPORTER_OTLP_HEADERS` | Comma-separated headers (e.g. `x-api-key=...`) | _(empty)_ |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Connection string injected from an Azure Container App secret | _(empty)_ |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint injected by the Azure managed agent, or a local Collector endpoint | _(empty)_ |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Transport protocol (`grpc` when injected by the Azure managed agent) | _(empty)_ |
 | `OTEL_SERVICE_NAME` | Service name reported in Azure Monitor | `acr-um-azure-app` |
 | `ENVIRONMENT` | Deployment environment tag (`production`, `staging`, `dev`) | `production` |
 | `OTEL_EXPORTER_STDOUT` | Force JSON telemetry logs to standard output | `true` (when no cloud endpoint is set) |
@@ -61,14 +61,16 @@ The application loads observability configuration from standard environment vari
 go run main.go
 ```
 
-### Option 2: Run with Azure Application Insights
+### Option 2: Run with an OTLP Collector
 ```bash
-export APPLICATIONINSIGHTS_CONNECTION_STRING="InstrumentationKey=your-key;IngestionEndpoint=https://eastus-8.in.applicationinsights.azure.com/"
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4318"
 export OTEL_SERVICE_NAME="acr-um-azure-app"
 export ENVIRONMENT="staging"
 
 go run main.go
 ```
+
+For Azure Monitor, the deployment workflow creates or reuses `$REPOSITORY-insights`, enables the managed OpenTelemetry agent in the Container Apps environment, and stores its connection string only as a Container App secret. No Application Insights credential is required in GitHub Actions.
 
 ### Option 3: Run with Docker
 ```bash

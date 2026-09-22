@@ -225,52 +225,66 @@ jobs:
           ACA_ENV=$(az containerapp env list --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" --query "[0].name" -o tsv)
           echo "Entorno detectado: $ACA_ENV"
 
-          # Configurar variables de entorno para Application Insights si existen
-          EXTRA_ENV_ARGS=""
-          if [ -n "${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}" ]; then
-            EXTRA_ENV_ARGS="APPLICATIONINSIGHTS_CONNECTION_STRING=${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}"
-          elif [ -n "${{ secrets.CONNECTION_STRING }}" ]; then
-            EXTRA_ENV_ARGS="CONNECTION_STRING=${{ secrets.CONNECTION_STRING }}"
+          APP_INSIGHTS_NAME="$REPO_NAME-insights"
+          LOCATION=$(az group show --name "${{ secrets.AZURE_RESOURCE_GROUP }}" --query location -o tsv)
+          if ! az monitor app-insights component show --app "$APP_INSIGHTS_NAME" --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" > /dev/null 2>&1; then
+            az monitor app-insights component create \
+              --app "$APP_INSIGHTS_NAME" \
+              --location "$LOCATION" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --kind web \
+              --application-type web
           fi
-          if [ -n "${{ secrets.INSTRUMENTATION_KEY }}" ]; then
-            EXTRA_ENV_ARGS="$EXTRA_ENV_ARGS INSTRUMENTATION_KEY=${{ secrets.INSTRUMENTATION_KEY }}"
-          fi
+          APP_INSIGHTS_CONNECTION_STRING=$(az monitor app-insights component show \
+            --app "$APP_INSIGHTS_NAME" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query connectionString -o tsv)
+
+          az containerapp env telemetry app-insights set \
+            --name "$ACA_ENV" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --connection-string "$APP_INSIGHTS_CONNECTION_STRING" \
+            --enable-open-telemetry-traces true \
+            --enable-open-telemetry-logs true
+
+          ENV_VARS=(
+            OTEL_SERVICE_NAME="$REPO_NAME"
+            ENVIRONMENT=production
+            APPLICATIONINSIGHTS_CONNECTION_STRING=secretref:appinsights-connection-string
+          )
+          SECRET_ARGS=(--secrets "appinsights-connection-string=$APP_INSIGHTS_CONNECTION_STRING")
 
           # Verificar si la Container App existe
           if az containerapp show --name "$REPO_NAME-app" --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" > /dev/null 2>&1; then
             echo "Actualizando Container App existente..."
-            if [ -n "$EXTRA_ENV_ARGS" ]; then
-              az containerapp update \
-                --name "$REPO_NAME-app" \
-                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-                --image "$TARGET_IMAGE" \
-                --set-env-vars $EXTRA_ENV_ARGS
-            else
-              az containerapp update \
-                --name "$REPO_NAME-app" \
-                --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-                --image "$TARGET_IMAGE"
-            fi
+            az containerapp secret set \
+              --name "$REPO_NAME-app" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --secrets "appinsights-connection-string=$APP_INSIGHTS_CONNECTION_STRING"
+            az containerapp update \
+              --name "$REPO_NAME-app" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --image "$TARGET_IMAGE" \
+              --remove-env-vars OTEL_EXPORTER_OTLP_ENDPOINT OTEL_EXPORTER_OTLP_HEADERS \
+              --set-env-vars "${ENV_VARS[@]}"
           else
             echo "Creando nueva Container App..."
-            CREATE_CMD="az containerapp create \
-              --name $REPO_NAME-app \
-              --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} \
-              --environment $ACA_ENV \
-              --image $TARGET_IMAGE \
-              --registry-server ${{ secrets.ACR_NAME_URL }} \
-              --registry-username ${{ secrets.REGISTRY_USERNAME }} \
-              --registry-password ${{ secrets.REGISTRY_PASSWORD }} \
+            az containerapp create \
+              --name "$REPO_NAME-app" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --environment "$ACA_ENV" \
+              --image "$TARGET_IMAGE" \
+              --registry-server "${{ secrets.ACR_NAME_URL }}" \
+              --registry-username "${{ secrets.REGISTRY_USERNAME }}" \
+              --registry-password "${{ secrets.REGISTRY_PASSWORD }}" \
+              "${SECRET_ARGS[@]}" \
+              --env-vars "${ENV_VARS[@]}" \
               --ingress external \
               --target-port 8080 \
               --cpu 0.25 \
               --memory 0.5Gi \
               --min-replicas 1 \
-              --max-replicas 1"
-            if [ -n "$EXTRA_ENV_ARGS" ]; then
-              CREATE_CMD="$CREATE_CMD --env-vars $EXTRA_ENV_ARGS"
-            fi
-            eval "$CREATE_CMD"
+              --max-replicas 1
           fi
 
       - name: Azure Logout

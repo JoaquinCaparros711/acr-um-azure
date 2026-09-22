@@ -12,7 +12,9 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
@@ -29,6 +31,7 @@ type Config struct {
 	ServiceVersion        string
 	Environment           string
 	OtlpEndpoint          string
+	OtlpProtocol          string
 	OtlpHeaders           map[string]string
 	AppInsightsConnString string
 	UseStdout             bool
@@ -62,60 +65,22 @@ func LoadConfigFromEnv() Config {
 		environment = "production"
 	}
 
-	appInsightsConn := os.Getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
-	if appInsightsConn == "" {
-		appInsightsConn = os.Getenv("CONNECTION_STRING")
-	}
-	if appInsightsConn == "" {
-		appInsightsConn = os.Getenv("APPLICATIONINSIGHTS")
-	}
-	if appInsightsConn == "" {
-		appInsightsConn = os.Getenv("APPLICAITONINSIGHTS")
-	}
-	if appInsightsConn == "" {
-		appInsightsConn = os.Getenv("APPINSIGHTS_CONNECTION_STRING")
-	}
-	appInsightsConn = sanitizeValue(appInsightsConn)
-
-	instrumentationKey := os.Getenv("INSTRUMENTATION_KEY")
-	if instrumentationKey == "" {
-		instrumentationKey = os.Getenv("INSTRUMENTATION")
-	}
-	if instrumentationKey == "" {
-		instrumentationKey = os.Getenv("APPINSIGHTS_INSTRUMENTATIONKEY")
-	}
-	if instrumentationKey == "" {
-		instrumentationKey = os.Getenv("APPLICATIONINSIGHTS_INSTRUMENTATION_KEY")
-	}
-	instrumentationKey = sanitizeValue(instrumentationKey)
-
-	if appInsightsConn == "" && instrumentationKey != "" {
-		appInsightsConn = "InstrumentationKey=" + instrumentationKey
-	}
+	appInsightsConn := sanitizeValue(os.Getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"))
 
 	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	otlpProtocol := os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL")
 	otlpHeaders := parseHeaders(os.Getenv("OTEL_EXPORTER_OTLP_HEADERS"))
 
-	// If Azure App Insights connection string is provided and no explicit OTLP endpoint is set,
-	// parse the ingestion endpoint and instrumentation key from connection string.
-	if appInsightsConn != "" && otlpEndpoint == "" {
-		ingestionEndpoint, ikey := parseAppInsightsConnectionString(appInsightsConn)
-		if ingestionEndpoint != "" {
-			otlpEndpoint = ingestionEndpoint
-		}
-		if ikey != "" && otlpHeaders == nil {
-			otlpHeaders = map[string]string{"x-api-key": ikey}
-		}
-	}
-
-	// Default to stdout export if no remote endpoint is configured or if explicitly enabled
-	useStdout := os.Getenv("OTEL_EXPORTER_STDOUT") == "true" || (otlpEndpoint == "" && appInsightsConn == "")
+	// A connection string identifies Application Insights but is not an OTLP endpoint.
+	// OTLP must be sent to a Collector or to Azure Monitor OTLP ingestion endpoints.
+	useStdout := os.Getenv("OTEL_EXPORTER_STDOUT") == "true" || otlpEndpoint == ""
 
 	return Config{
 		ServiceName:           serviceName,
 		ServiceVersion:        serviceVersion,
 		Environment:           environment,
 		OtlpEndpoint:          otlpEndpoint,
+		OtlpProtocol:          otlpProtocol,
 		OtlpHeaders:           otlpHeaders,
 		AppInsightsConnString: appInsightsConn,
 		UseStdout:             useStdout,
@@ -196,6 +161,15 @@ func initTracerProvider(ctx context.Context, cfg Config, res *resource.Resource)
 			stdouttrace.WithPrettyPrint(),
 			stdouttrace.WithWriter(writer),
 		)
+	} else if cfg.OtlpProtocol == "grpc" {
+		opts := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(grpcEndpoint(cfg.OtlpEndpoint))}
+		if len(cfg.OtlpHeaders) > 0 {
+			opts = append(opts, otlptracegrpc.WithHeaders(cfg.OtlpHeaders))
+		}
+		if !strings.HasPrefix(cfg.OtlpEndpoint, "https://") {
+			opts = append(opts, otlptracegrpc.WithInsecure())
+		}
+		exporter, err = otlptracegrpc.New(ctx, opts...)
 	} else {
 		opts := []otlptracehttp.Option{
 			otlptracehttp.WithEndpoint(cfg.OtlpEndpoint),
@@ -203,7 +177,7 @@ func initTracerProvider(ctx context.Context, cfg Config, res *resource.Resource)
 		if len(cfg.OtlpHeaders) > 0 {
 			opts = append(opts, otlptracehttp.WithHeaders(cfg.OtlpHeaders))
 		}
-		if !strings.HasPrefix(cfg.OtlpEndpoint, "https://") && !strings.Contains(cfg.OtlpEndpoint, ":443") {
+		if !strings.HasPrefix(cfg.OtlpEndpoint, "https://") {
 			opts = append(opts, otlptracehttp.WithInsecure())
 		}
 		exporter, err = otlptracehttp.New(ctx, opts...)
@@ -244,6 +218,19 @@ func initMeterProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 		if err == nil {
 			reader = sdkmetric.NewPeriodicReader(exp, sdkmetric.WithInterval(interval))
 		}
+	} else if cfg.OtlpProtocol == "grpc" {
+		opts := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(grpcEndpoint(cfg.OtlpEndpoint))}
+		if len(cfg.OtlpHeaders) > 0 {
+			opts = append(opts, otlpmetricgrpc.WithHeaders(cfg.OtlpHeaders))
+		}
+		if !strings.HasPrefix(cfg.OtlpEndpoint, "https://") {
+			opts = append(opts, otlpmetricgrpc.WithInsecure())
+		}
+		var exp sdkmetric.Exporter
+		exp, err = otlpmetricgrpc.New(ctx, opts...)
+		if err == nil {
+			reader = sdkmetric.NewPeriodicReader(exp, sdkmetric.WithInterval(interval))
+		}
 	} else {
 		opts := []otlpmetrichttp.Option{
 			otlpmetrichttp.WithEndpoint(cfg.OtlpEndpoint),
@@ -251,7 +238,7 @@ func initMeterProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 		if len(cfg.OtlpHeaders) > 0 {
 			opts = append(opts, otlpmetrichttp.WithHeaders(cfg.OtlpHeaders))
 		}
-		if !strings.HasPrefix(cfg.OtlpEndpoint, "https://") && !strings.Contains(cfg.OtlpEndpoint, ":443") {
+		if !strings.HasPrefix(cfg.OtlpEndpoint, "https://") {
 			opts = append(opts, otlpmetrichttp.WithInsecure())
 		}
 
@@ -272,6 +259,11 @@ func initMeterProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 	)
 
 	return mp, nil
+}
+
+func grpcEndpoint(endpoint string) string {
+	endpoint = strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
+	return strings.TrimSuffix(endpoint, "/")
 }
 
 // sanitizeValue strips spaces, quotes, and dollar signs from configuration strings.

@@ -1,0 +1,9 @@
+El pipeline ahora:
+- Crea o reutiliza "<repositorio>-insights" en Azure.
+- Obtiene su connection string durante el despliegue.
+- La guarda como secreto de la Container App: appinsights-connection-string.
+- Expone únicamente APPLICATIONINSIGHTS_CONNECTION_STRING=secretref:appinsights-connection-string.
+- Activa trazas y logs del agente administrado de Azure Monitor.
+- Elimina endpoints OTLP antiguos definidos en la Container App para no impedir la inyección automática del agente.
+
+a app ahora toma exclusivamente APPLICATIONINSIGHTS_CONNECTION_STRING;

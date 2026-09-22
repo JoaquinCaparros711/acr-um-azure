@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -102,6 +103,7 @@ func FiberMiddleware(serviceName string) fiber.Handler {
 		if traceID != "" {
 			c.Set("X-Trace-Id", traceID)
 		}
+		log.Printf("event=request_started method=%s path=%s trace_id=%s client_ip=%s", c.Method(), c.Path(), traceID, c.IP())
 
 		// Propagate context to Fiber handlers
 		c.SetUserContext(ctx)
@@ -143,6 +145,7 @@ func FiberMiddleware(serviceName string) fiber.Handler {
 			metrics.requestCounter.Add(ctx, 1, metricAttrs)
 			metrics.durationHist.Record(ctx, elapsed, metricAttrs)
 		}
+		log.Printf("event=request_finished method=%s path=%s status=%d duration_ms=%.2f trace_id=%s", c.Method(), c.Path(), statusCode, elapsed, traceID)
 
 		return err
 	}

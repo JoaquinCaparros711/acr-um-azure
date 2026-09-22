@@ -6,7 +6,9 @@ require (
 	github.com/gofiber/fiber/v2 v2.52.5
 	github.com/stretchr/testify v1.12.1
 	go.opentelemetry.io/otel v1.46.0
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.46.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.46.0
 	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.46.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.46.0

@@ -9,10 +9,44 @@ and optionally deploying the container instance on Microsoft Azure.
 
 import argparse
 import os
+import platform
 import shutil
 import sys
 import subprocess
-from typing import List, Optional
+from typing import Dict, List, Optional
+
+
+# Installation hints shown when a required dependency is missing on macOS.
+_MACOS_INSTALL_HINTS: Dict[str, str] = {
+    "docker": "brew install --cask docker  # or install Docker Desktop from https://www.docker.com",
+    "az": "brew install azure-cli",
+}
+
+
+class DependencyChecker:
+    """Verifies that required CLI tools are available on the system PATH before execution."""
+
+    def __init__(self, required: List[str]):
+        self.required = required
+
+    def check(self) -> None:
+        """Checks all required executables. Raises EnvironmentError if any are missing."""
+        missing: List[str] = [cmd for cmd in self.required if shutil.which(cmd) is None]
+
+        if not missing:
+            return
+
+        is_macos = platform.system() == "Darwin"
+        lines = ["[ERROR] The following required tools were not found on your PATH:"]
+
+        for cmd in missing:
+            hint = _MACOS_INSTALL_HINTS.get(cmd, "Please install it manually and ensure it is on your PATH.")
+            if is_macos:
+                lines.append(f"  - {cmd}  →  {hint}")
+            else:
+                lines.append(f"  - {cmd}  →  Please install it and ensure it is on your PATH.")
+
+        raise EnvironmentError("\n".join(lines))
 
 
 class CommandRunner:
@@ -165,8 +199,8 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--resource-group",
-        default=os.getenv("AZURE_RESOURCE_GROUP", "rg-ingenieria-um"),
-        help="Azure Resource Group name (default: rg-ingenieria-um)"
+        default=os.getenv("AZURE_RESOURCE_GROUP", "azr-ingenieria-um-bujaldon"),
+        help="Azure Resource Group name (default: azr-ingenieria-um-bujaldon)"
     )
     parser.add_argument(
         "--deploy",
@@ -183,6 +217,13 @@ def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:
 
 def main(cli_args: Optional[List[str]] = None) -> None:
     args = parse_args(cli_args)
+
+    try:
+        DependencyChecker(required=["docker", "az"]).check()
+    except EnvironmentError as dep_err:
+        print(dep_err, file=sys.stderr)
+        sys.exit(1)
+
     runner = CommandRunner(dry_run=args.dry_run)
 
     publisher = AcrPublisher(
