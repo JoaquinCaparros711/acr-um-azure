@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -30,7 +31,9 @@ func SetupApp(deps AppDependencies) *fiber.App {
 
 	// Global Middlewares
 	app.Use(recover.New())
-	app.Use(telemetry.FiberMiddleware(deps.TelemetryConfig.ServiceName))
+	for _, h := range telemetry.FiberMiddleware(deps.TelemetryConfig.ServiceName) {
+		app.Use(h)
+	}
 
 	// Register Routes
 	registerRoutes(app)
@@ -53,6 +56,7 @@ func handleRoot(c *fiber.Ctx) error {
 	ctx := c.UserContext()
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.String("app.handler", "root"))
+	slog.InfoContext(ctx, "root endpoint hit")
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"status":   "success",
@@ -92,6 +96,7 @@ func handleTelemetryDemo(c *fiber.Ctx) error {
 	time.Sleep(15 * time.Millisecond) // Simulated external latency
 	apiSpan.End()
 
+	slog.InfoContext(ctx, "telemetry demo completed", "child_spans", 2)
 	parentSpan := trace.SpanFromContext(ctx)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
