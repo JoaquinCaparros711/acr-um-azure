@@ -35,6 +35,14 @@ jobs:
         run: |
           go test -v -race -cover ./...
 
+      - name: Run Snyk to check for vulnerabilities
+        uses: snyk/actions/golang@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.API_SNYK }}
+        with:
+          args: --severity-threshold=high
+
   # =========================================================================
   # STAGE 2: Build & Push
   # =========================================================================
